@@ -1,5 +1,10 @@
 #include "mainwindow.h"
+#include <QCoreApplication>
+#include <QApplication>
+#include <QStringList>
 
+#define xfourcc(a,b,c,d)\
+        (((__u32)(a)<<0)|((__u32)(b)<<8)|((__u32)(c)<<16)|((__u32)(d)<<24))
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),out(stdout)
 {
@@ -14,9 +19,11 @@ MainWindow::MainWindow(QWidget *parent)
     irVid->setWindowTitle("Infrared");
     irVid->show();
     colorCamera = new CameraDataFeed();
+    colorCamera->setObjectName("color");
     colorCamera->setFourcc(0x56595559);
     depthCamera = new CameraDataFeed();
-    depthCamera->setFourcc(0x495a4e49);
+    depthCamera->setObjectName("depth");
+    depthCamera->setFourcc(xfourcc('I','N','R','I'));
     controlsWidget = new ControlsWidget();
     controlsWidget->setCamera(depthCamera);
     controlsWidget->setWindowTitle("Video Controls");
@@ -115,18 +122,19 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(colorCamera,SIGNAL(newDepthImage(QImage)),depthVid,SLOT(setImage(QImage)));
     connect(colorCamera, SIGNAL(newInfraredImage(QImage)), irVid, SLOT(setImage(QImage)));
-    connect(startButton, SIGNAL(clicked()), colorCamera, SLOT(startVideo()));
     connect(stopButton,SIGNAL(clicked()), colorCamera, SLOT(stopVideo()));
     connect(colorDevicePathEdit,SIGNAL(textChanged(QString)),colorCamera,SLOT(setCameraDevice(QString)));
 
     connect(colorCamera,SIGNAL(newColorImage(QImage)),colorVid,SLOT(setImage(QImage)));
     connect(depthCamera,SIGNAL(newDepthImage(QImage)),depthVid,SLOT(setImage(QImage)));
     connect(depthCamera, SIGNAL(newInfraredImage(QImage)), irVid, SLOT(setImage(QImage)));
-    connect(startButton, SIGNAL(clicked()), depthCamera, SLOT(startVideo()));
     connect(stopButton,SIGNAL(clicked()), depthCamera, SLOT(stopVideo()));
     connect(depthDevicePathEdit,SIGNAL(textChanged(QString)),depthCamera,SLOT(setCameraDevice(QString)));
 
+    connect(startButton, SIGNAL(clicked()), colorCamera, SLOT(startVideo()));
+    connect(startButton, SIGNAL(clicked()), depthCamera, SLOT(startVideo()));
     connect(startButton,SIGNAL(clicked()),this,SLOT(openFifo()));
+
     connect(stopButton,SIGNAL(clicked()),this,SLOT(closeFifo()));
 
     /*
@@ -134,10 +142,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(maxSetting,SIGNAL(valueChanged(int)),depthCamera,SLOT(setDepthMax(int)));
     connect(byteGroup,SIGNAL(buttonClicked(int)),depthCamera,SLOT(setDepthMask(int)));*/
 
-    connect(snapshotButton,SIGNAL(clicked()),colorCamera,SLOT(savePicture()));
-    connect(snapshotButton,SIGNAL(clicked()),depthCamera,SLOT(savePicture()));
-    connect(this,SIGNAL(takeSnap()),colorCamera,SLOT(savePicture()));
-    connect(this,SIGNAL(takeSnap()),depthCamera,SLOT(savePicture()));
+    connect(snapshotButton,SIGNAL(clicked()),this,SLOT(ontakeSnap()));
+    connect(this,SIGNAL(takeSnap(QDateTime)),colorCamera,SLOT(savePicture(QDateTime)));
+    connect(this,SIGNAL(takeSnap(QDateTime)),depthCamera,SLOT(savePicture(QDateTime)));
 
     connect(snapshotDirEdit,SIGNAL(textChanged(QString)),colorCamera,SLOT(setSnapshotDir(QString)));
     connect(snapshotDirEdit,SIGNAL(textChanged(QString)),depthCamera,SLOT(setSnapshotDir(QString)));
@@ -158,7 +165,21 @@ MainWindow::MainWindow(QWidget *parent)
         fifoRemoteFilenameEdit->setText(settings->value("fifoRemoteFilename").toString());
     }
     connect(timer, SIGNAL(timeout()), this, SLOT(checkFifo()));
+
+    QStringList cmdline_args = QCoreApplication::arguments();
+    if(cmdline_args.size() > 1)
+    {
+        if(cmdline_args.at(1) == "start")
+        {
+            out << "start!"<<endl;
+            QApplication::postEvent(startButton,
+                                       new QKeyEvent(QEvent::KeyPress, Qt::Key_Space, 0, 0));
+               QApplication::postEvent(startButton,
+                                       new QKeyEvent(QEvent::KeyRelease, Qt::Key_Space, 0, 0));
+        }
+    }
 }
+
 
 MainWindow::~MainWindow()
 {
@@ -175,15 +196,23 @@ void MainWindow::setFifoFilename(QString filename){
 }
 
 void MainWindow::openFifo(){
-    out << "FIFO" << endl;
-    fifo_fd = open(fifo_filename.toStdString().c_str(), O_NONBLOCK | O_RDWR);
-    if (fifo_fd == -1)
+    if(!fifo_filename.isEmpty())
     {
-        perror("opening fifo");
-        return;
+            out << "FIFO" << endl;
+            fifo_fd = open(fifo_filename.toStdString().c_str(), O_NONBLOCK | O_RDWR);
+            if (fifo_fd == -1)
+            {
+                out << " error opening fifo " << fifo_filename << endl;
+                return;
+            }
     }
     timer->start(1);
     return;
+}
+
+void MainWindow::ontakeSnap()
+{
+    emit takeSnap(QDateTime::currentDateTime());
 }
 
 void MainWindow::closeFifo(){
@@ -204,6 +233,6 @@ void MainWindow::checkFifo(){
         }
     } else {
         out << "takeSnap" << endl;
-        emit takeSnap();
+        emit takeSnap(QDateTime::currentDateTime());
     }
 }

@@ -1,4 +1,6 @@
 #include "cameradatafeed.h"
+#include <QDir>
+#include <fstream>
 
 CameraDataFeed::CameraDataFeed(QObject *parent) :
     QObject(parent),out(stdout)
@@ -221,18 +223,18 @@ void CameraDataFeed::setConfidenceSetting(int value){
 }
 
 bool CameraDataFeed::setFormat(){
-    out << "FMT" << endl;
+    out << objectName() << " FMT" << endl;
     if(! state & OPEN){
-        out << "must open camera first" << endl;
+        out << objectName() << "must open camera first" << endl;
         return false;
     }else if(state & REQBUFS){
-        out << "cannot set format while buffers active" << endl;
+        out << objectName() << "cannot set format while buffers active" << endl;
         return false;
     }
     struct v4l2_fmtdesc fmtdesc;
     int i,e,r, trys;
     i = e = r = 0;
-    __u8 * pixfmt = new __u8[5];
+    std::vector<__u8> pixfmt(5);
     pixfmt[4] = 0;
     trys = 255;
     while(trys-- > 0){
@@ -240,23 +242,21 @@ bool CameraDataFeed::setFormat(){
         fmtdesc.index = i;
         fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (-1 == ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc)){  // Get video format
-            perror("enum fmt");
             break;
         }
-        *((__u32 *)pixfmt) = fmtdesc.pixelformat;
-        printf("index: %d format: %s description: %s \n",
-               i, pixfmt /*fmtdesc.pixelformat */, fmtdesc.description);
+        *((__u32 *)&pixfmt[0]) = fmtdesc.pixelformat;
+        out << objectName() << "format " << i << " " << fmtdesc.pixelformat << " " << (const char*)fmtdesc.description << endl;
         i++;
     }
-    delete[] pixfmt;
     struct v4l2_format pixFormat;
     memset(&pixFormat, 0, sizeof(pixFormat));           // Clear struct
     pixFormat.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;    // Required
     if (-1 == ioctl(fd, VIDIOC_G_FMT, &pixFormat)){  // Get video format
-        perror("getting format");
+        out << objectName() << " error getting" << endl;
         return false;
     }
     pixFormat.fmt.pix.pixelformat = fourcc;
+    out << objectName() << " fourcc used  " << fourcc << (fourcc == YUYV ? "yuyv" : "other") << endl;
 
     if(fourcc == YUYV){
         pixFormat.fmt.pix.width       = 1920;
@@ -266,7 +266,7 @@ bool CameraDataFeed::setFormat(){
         pixFormat.fmt.pix.height      = 480;
     }
     if (-1 == ioctl(fd, VIDIOC_S_FMT, &pixFormat)){  // Set video format
-        perror("setting format");
+        out << objectName() << " ERROR SETTING FORMAT!!!!!";
         return false;
     }
     v4l2Format = pixFormat;
@@ -425,7 +425,7 @@ bool CameraDataFeed::qbuf(){
     return true;
 }
 bool CameraDataFeed::startStream(){
-    out << "stream" << endl;
+    out << objectName() << " stream" << endl;
     uint dMask = OPEN | MMAP | QBUF;
     if(! ((state & dMask) == dMask)){
         out << "depends OPEN MMAP QBUF" << endl;
@@ -532,6 +532,7 @@ bool CameraDataFeed::closeCamera(){
     return true;
 }
 void CameraDataFeed::startVideo(){
+    out << objectName() << " setup" << endl;
     openCamera();
     getControls();
     setFormat();
@@ -593,11 +594,21 @@ void CameraDataFeed::updateData()
 void CameraDataFeed::createImages(void * voidData){
     const int width = v4l2Format.fmt.pix.width;
     const int height = v4l2Format.fmt.pix.height;
-    const u_int32_t pixelFormat = v4l2Format.fmt.pix.pixelformat;
+    u_int32_t pixelFormat = v4l2Format.fmt.pix.pixelformat;
     u_int8_t * data = (u_int8_t *)voidData;
 
-    QDateTime local(QDateTime::currentDateTime());
+    QDateTime now = QDateTime::currentDateTime();
+    QDateTime local;
+    if(takeSnapTime.isValid())
+    {
+        local = takeSnapTime;
+        takeSnapTime = QDateTime();
+    }
+    else
+        local = now;
+
     int timestamp = (int)local.toUTC().toTime_t();
+    int timestampnow = (int)now.toUTC().toTime_t();
     QString common_filename = QString::number(timestamp) + local.toString("zzz")
             + QString(".png");
     vector<int> png_settings;
@@ -612,6 +623,7 @@ void CameraDataFeed::createImages(void * voidData){
     Mat depth_cv_rgb(height,width,CV_8UC3);
     Mat ir_cv_rgb(height,width,CV_8UC3);
 
+    //out << objectName() << " " << width << " " << height << " " << pixelFormat << " " << (pixelFormat == YUYV ? "yuyv" : "other") << endl;
     switch(pixelFormat){
     case YUYV:
         for(int j = 0 ; j < height ; j++){
@@ -628,31 +640,42 @@ void CameraDataFeed::createImages(void * voidData){
                 color_cv.at<cv::Vec2b>(j,i) = colorpix_cv;
             }
         }
-        cvtColor(color_cv,color_cv_rgb,CV_YUV2RGB_YUYV);
-        colorImage = QImage(color_cv_rgb.data,color_cv_rgb.cols,color_cv_rgb.rows,
-                            color_cv_rgb.step,QImage::Format_RGB888).copy();
-        emit newColorImage(colorImage);
-        if(takeSnap){
-            Mat color_cv_bgr;
-            cvtColor(color_cv_rgb, color_cv_bgr, CV_RGB2BGR);
-            QString color_filename = snapshotDir + QString("/color/")
-                    + common_filename;
-            out << color_filename << endl;
-            try {
-                imwrite(color_filename.toStdString(), color_cv_bgr, png_settings);
-            } catch (cv::Exception& error) {
-                QTextStream(stderr) << "error writing image" << error.what() << endl;
+        if(objectName() == "color")
+        {
+            cvtColor(color_cv,color_cv_rgb,CV_YUV2RGB_YUYV);
+            colorImage = QImage(color_cv_rgb.data,color_cv_rgb.cols,color_cv_rgb.rows,
+                                color_cv_rgb.step,QImage::Format_RGB888).copy();
+            emit newColorImage(colorImage);
+            if(takeSnap)
+            {
+                Mat color_cv_bgr;
+                cvtColor(color_cv_rgb, color_cv_bgr, CV_RGB2BGR);
+                QString color_filename = snapshotDir + QString("/color");
+                QDir().mkdir(color_filename);
+       color_filename += "/"                 + common_filename;
+       std::ofstream onf((color_filename+".txt").toLocal8Bit());
+       onf << timestampnow;
+                try {
+                    imwrite(color_filename.toStdString(), color_cv_bgr, png_settings);
+                    out << objectName() << " to " << color_filename << endl;
+                } catch (cv::Exception& error) {
+                    out << objectName() << " failed saving to " << color_filename << endl;
+                    QTextStream(stderr) << "error writing image" << error.what() << endl;
+                }
+                takeSnap = false;
             }
-            takeSnap = false;
         }
         break;
     case INVZ:
     case INVR:
         // process depth
+        out << "INVZ/INVR" <<endl;
+
         break;
     case INVI:
     case RELI:
         // process infrared
+        out << "INVI/RELI" <<endl;
         break;
     case INZI:
     case INRI:
@@ -683,25 +706,37 @@ void CameraDataFeed::createImages(void * voidData){
                             ir_cv_rgb.step,QImage::Format_RGB888).copy();
         emit newInfraredImage(infraredImage);
         if(takeSnap){
-            QString depth_filename = snapshotDir + QString("/depth/")
-                    + common_filename;
+            QString depth_filename = snapshotDir + QString("/depth");
+            QDir().mkdir(depth_filename);
+              depth_filename += "/" + common_filename;
             out << depth_filename << endl;
             try {
                 imwrite(depth_filename.toStdString(), depth_cv, png_settings);
+                out << objectName() << " to " << depth_filename << endl;
             } catch (cv::Exception& error) {
+                out << objectName() << " failed saving to " << depth_filename << endl;
                 QTextStream(stderr) << "error writing image" << error.what() << endl;
             }
-            QString ir_filename = snapshotDir + QString("/ir/")
-                    + common_filename;
+            std::ofstream onf((depth_filename+".txt").toLocal8Bit());
+            onf << timestampnow;
+            QString ir_filename = snapshotDir + QString("/ir");
+                    QDir().mkdir(ir_filename);
+                    ir_filename += "/" + common_filename;
             out << ir_filename << endl;
+            std::ofstream onfir((ir_filename+".txt").toLocal8Bit());
+            onfir << timestampnow;
             try {
                 imwrite(ir_filename.toStdString(), ir_cv, png_settings);
+                out << objectName() << " to " << ir_filename << endl;
             } catch (cv::Exception& error) {
+                out << objectName() << " failed saving to " << ir_filename << endl;
                 QTextStream(stderr) << "error writing image" << error.what() << endl;
             }
             takeSnap = false;
         }
         break;
+    default:
+        out << objectName() << " pixelformat "<< pixelFormat <<endl;
     }
 
 /*
@@ -730,11 +765,13 @@ void CameraDataFeed::setDepthMask(int byteMask){
     depthMask = (u_int16_t)byteMask;
 }
 
-void CameraDataFeed::savePicture(){
+void CameraDataFeed::savePicture(QDateTime t){
     takeSnap = true;
+    takeSnapTime = t;
 }
 
 void CameraDataFeed::setSnapshotDir(QString dir){
+    QDir().mkdir(dir);
     snapshotDir = dir;
 }
 

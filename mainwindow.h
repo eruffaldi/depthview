@@ -78,9 +78,10 @@ public:
     int fifo_fd;
 
 signals:
-    void takeSnap();
+    void takeSnap(QDateTime time);
 
 public slots:
+    void ontakeSnap();
     void setFifoFilename(QString);
     void openFifo();
     void closeFifo();

@@ -88,6 +88,7 @@ class CameraDataFeed : public QObject
 //        "MMAP", "QBUF", "STREAM", "TIMER"
 //    };
     State state;
+    QDateTime takeSnapTime;
 
 public:
     explicit CameraDataFeed(QObject *parent = 0);
@@ -113,7 +114,7 @@ public slots:
     void setDepthMin(int);
     void setDepthMax(int);
     void setDepthMask(int);
-    void savePicture();
+    void savePicture(QDateTime);
     void setSnapshotDir(QString);
 };
 
