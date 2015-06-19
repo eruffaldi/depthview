@@ -690,13 +690,13 @@ void CameraDataFeed::createImages(void * voidData){
                 u_int8_t high = (depth >> 8) & 0xff;
                 u_int8_t low = depth & 0xff;
                 Vec2b depthpix_cv;
-                depthpix_cv[0] = high;
-                depthpix_cv[1] = low;
+                depthpix_cv[0] = low;
+                depthpix_cv[1] = high;
                 depth_cv.at<cv::Vec2b>(j,i) = depthpix_cv;
                 ir_cv.at<uchar>(j,i) = ir;
             }
         }
-        depth_cv.convertTo(depth_cv_8,CV_8U,1.0/256.0);
+        depth_cv.convertTo(depth_cv_8,CV_8U,256.0/1200.0);
         cvtColor(depth_cv_8,depth_cv_rgb,CV_GRAY2RGB);
         depthImage = QImage(depth_cv_rgb.data,depth_cv_rgb.cols,depth_cv_rgb.rows,
                             depth_cv_rgb.step,QImage::Format_RGB888).copy();
